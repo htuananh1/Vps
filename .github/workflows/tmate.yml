@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       vps_name:
-        description: 'Tên VPS (dùng để lưu backup)'
+        description: 'Tên VPS'
         required: true
         default: 'manual-vps'
       backup:
@@ -17,7 +17,7 @@ on:
 jobs:
   start-vps:
     runs-on: ubuntu-latest
-    timeout-minutes: 360  # 6 hours
+    timeout-minutes: 360
 
     steps:
       - name: ⬇️ Checkout
@@ -30,12 +30,12 @@ jobs:
         run: |
           name="${{ github.event.inputs.vps_name || github.event.client_payload.vps_name || 'manual-vps' }}"
           if [ "${{ github.event.inputs.backup || github.event.client_payload.backup }}" == "true" ]; then
-            # 1. Thử restore từ backup cục bộ
+            # Kiểm tra backup cục bộ
             if [ -f ".backup/$name.zip" ]; then
               echo "📦 Restoring from local backup..."
               unzip -o ".backup/$name.zip" -d . || echo "⚠️ Failed to restore local backup."
             else
-              # 2. Nếu không có, thử restore từ remote (transfer.sh)
+              # Nếu không có, thử restore từ remote (auto-start.txt)
               echo "🔍 Local backup not found. Trying remote restore..."
               if [ -f "auto-start.txt" ]; then
                 chmod +x auto-start.txt
@@ -51,7 +51,7 @@ jobs:
           sudo systemctl start ssh
           sudo systemctl enable ssh
           
-          # Cấu hình SSH cho phép login bằng password
+          # Cấu hình SSH để login bằng password
           sudo sed -i 's/#PasswordAuthentication yes/PasswordAuthentication yes/' /etc/ssh/sshd_config
           sudo sed -i 's/PasswordAuthentication no/PasswordAuthentication yes/' /etc/ssh/sshd_config
           sudo sed -i 's/#PermitEmptyPasswords no/PermitEmptyPasswords yes/' /etc/ssh/sshd_config
@@ -64,21 +64,13 @@ jobs:
 
       - name: 🔐 Start Serveo SSH Tunnel
         run: |
-          # Tạo key pair nếu chưa có
+          # Tạo key pair
           ssh-keygen -t rsa -f ~/.ssh/id_rsa -N "" -q
           
-          # Cấu hình SSH client
-          echo "Host serveo.net" > ~/.ssh/config
-          echo "  StrictHostKeyChecking no" >> ~/.ssh/config
-          echo "  UserKnownHostsFile=/dev/null" >> ~/.ssh/config
-          
-          # Mở tunnel trong background
+          # Mở tunnel
           ssh -R 80:localhost:22 serveo.net > serveo_output.txt 2>&1 &
-          
-          # Đợi một chút để tunnel được thiết lập
           sleep 8
           
-          # Lấy URL tunnel
           SERVEO_URL=$(grep -o "https://[a-zA-Z0-9.-]*\.serveo\.net" serveo_output.txt | head -1)
           if [ -z "$SERVEO_URL" ]; then
             SERVEO_URL="Check serveo_output.txt"
@@ -95,7 +87,7 @@ jobs:
             echo "SSH Command: ssh runner@$SERVEO_SSH_LINK"
             echo "Serveo Link: ${{ env.SERVEO_SSH_LINK }}"
             echo "Username: runner"
-            echo "Password: (empty - no password)"
+            echo "Password: (empty)"
             echo "Active Time: 6 hours"
             echo "========================"
           } > "links/$name.txt"
@@ -104,7 +96,6 @@ jobs:
       - name: 🚀 Start Playit Tunnel (if exists)
         run: |
           if [ -f "playit" ]; then
-            echo "🎮 Starting Playit..."
             chmod +x playit
             nohup ./playit > playit.log 2>&1 &
             echo "✅ Playit started."
@@ -115,16 +106,17 @@ jobs:
       - name: 📦 Save backup
         run: |
           name="${{ github.event.inputs.vps_name || github.event.client_payload.vps_name || 'manual-vps' }}"
-          echo "💾 Creating backup..."
           zip -qr ".backup/$name.zip" . -x ".git/*" ".github/*" ".backup/*" "links/*" || true
           
           # Upload backup lên transfer.sh
           if [ -f ".backup/$name.zip" ]; then
             echo "📤 Uploading backup to transfer.sh..."
-            UPLOAD_URL=$(curl -s --upload-file ".backup/$name.zip" "https://transfer.sh/$name.zip")
-            if [ -n "$UPLOAD_URL" ]; then
-              echo "🔗 Backup uploaded: $UPLOAD_URL"
-              echo "$UPLOAD_URL" > "links/$name-backup-url.txt"
+            UPLOAD_LINK=$(curl -s --upload-file ".backup/$name.zip" "https://transfer.sh/$name.zip")
+            if [ -n "$UPLOAD_LINK" ]; then
+              echo "🔗 Backup uploaded: $UPLOAD_LINK"
+              echo "$UPLOAD_LINK" > "links/$name-backup-url.txt"
+            else
+              echo "❌ Failed to upload backup."
             fi
           fi
 
@@ -136,9 +128,8 @@ jobs:
 
       - name: ⏳ Keep VPS alive
         run: |
-          echo "🟢 VPS is running for 6 hours..."
           for i in {1..360}; do
-            echo "⏱️ Minute $i/360"
+            echo "🟢 Running minute $i/360..."
             sleep 60
           done
 
@@ -151,4 +142,4 @@ jobs:
             -H "Authorization: Bearer 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" \
             -H "Content-Type: application/json" \
             https://api.github.com/repos/${{ github.repository }}/dispatches \
-            -d '{"event_type": "create-vps", "client_payload": {"vps_name": "manual-vps", "backup": true}}'
+            -d '{"event_type": "create-vps", "client_payload": {"vps_name": "'"$name"'", "backup": true}}'
