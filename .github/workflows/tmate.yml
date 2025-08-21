@@ -2,6 +2,15 @@ name: Create VPS (Auto Restart)
 
 on:
   workflow_dispatch:
+    inputs:
+      vps_name:
+        description: 'Tên VPS (dùng để lưu backup)'
+        required: true
+        default: 'manual-vps'
+      backup:
+        description: 'Khôi phục từ backup?'
+        type: boolean
+        default: false
   repository_dispatch:
     types: [create-vps]
 
@@ -9,8 +18,6 @@ jobs:
   start-vps:
     runs-on: ubuntu-latest
     timeout-minutes: 360  # 6 hours
-    env:
-      TMATE_SERVER: nyc1.tmate.io
 
     steps:
       - name: ⬇️ Checkout
@@ -21,47 +28,124 @@ jobs:
 
       - name: 💾 Restore backup (optional)
         run: |
-          name="${{ github.event.client_payload.vps_name || 'manual-vps' }}"
-          if [ "${{ github.event.client_payload.backup }}" == "true" ]; then
-            unzip ".backup/$name.zip" -d . || echo "⚠️ No backup found."
+          name="${{ github.event.inputs.vps_name || github.event.client_payload.vps_name || 'manual-vps' }}"
+          if [ "${{ github.event.inputs.backup || github.event.client_payload.backup }}" == "true" ]; then
+            # 1. Thử restore từ backup cục bộ
+            if [ -f ".backup/$name.zip" ]; then
+              echo "📦 Restoring from local backup..."
+              unzip -o ".backup/$name.zip" -d . || echo "⚠️ Failed to restore local backup."
+            else
+              # 2. Nếu không có, thử restore từ remote (transfer.sh)
+              echo "🔍 Local backup not found. Trying remote restore..."
+              if [ -f "auto-start.txt" ]; then
+                chmod +x auto-start.txt
+                timeout 60s ./auto-start.txt restore_backup || echo "⚠️ Remote restore failed or timed out."
+              fi
+            fi
           fi
 
-      - name: 🔐 Start tmate session
+      - name: 🔧 Setup SSH Server
         run: |
-          sudo apt update -y && sudo apt install -y tmate
-          tmate -S /tmp/tmate.sock new-session -d
-          tmate -S /tmp/tmate.sock wait tmate-ready
-          SSH=$(tmate -S /tmp/tmate.sock display -p '#{tmate_ssh}')
-          echo "$SSH" | tee "links/${{ github.event.client_payload.vps_name || 'manual-vps' }}.txt"
+          sudo apt update -y
+          sudo apt install -y openssh-server
+          sudo systemctl start ssh
+          sudo systemctl enable ssh
+          
+          # Cấu hình SSH cho phép login bằng password
+          sudo sed -i 's/#PasswordAuthentication yes/PasswordAuthentication yes/' /etc/ssh/sshd_config
+          sudo sed -i 's/PasswordAuthentication no/PasswordAuthentication yes/' /etc/ssh/sshd_config
+          sudo sed -i 's/#PermitEmptyPasswords no/PermitEmptyPasswords yes/' /etc/ssh/sshd_config
+          
+          # Đặt mật khẩu trống cho user 'runner'
+          sudo passwd -d runner
+          
+          sudo systemctl restart ssh
+          echo "✅ SSH Server is ready."
 
-      - name: 🚀 Start Playit Tunnel
+      - name: 🔐 Start Serveo SSH Tunnel
         run: |
-          wget -q https://github.com/playit-cloud/playit-agent/releases/latest/download/playit-linux-amd64 -O playit
-          chmod +x playit
-          nohup ./playit > playit.log 2>&1 &
-          echo "✅ Playit started in background."
+          # Tạo key pair nếu chưa có
+          ssh-keygen -t rsa -f ~/.ssh/id_rsa -N "" -q
+          
+          # Cấu hình SSH client
+          echo "Host serveo.net" > ~/.ssh/config
+          echo "  StrictHostKeyChecking no" >> ~/.ssh/config
+          echo "  UserKnownHostsFile=/dev/null" >> ~/.ssh/config
+          
+          # Mở tunnel trong background
+          ssh -R 80:localhost:22 serveo.net > serveo_output.txt 2>&1 &
+          
+          # Đợi một chút để tunnel được thiết lập
+          sleep 8
+          
+          # Lấy URL tunnel
+          SERVEO_URL=$(grep -o "https://[a-zA-Z0-9.-]*\.serveo\.net" serveo_output.txt | head -1)
+          if [ -z "$SERVEO_URL" ]; then
+            SERVEO_URL="Check serveo_output.txt"
+          fi
+          
+          echo "SERVEO_SSH_LINK=$SERVEO_URL" >> $GITHUB_ENV
+          echo "🔗 Serveo tunnel started: $SERVEO_URL"
+
+      - name: 📝 Save Connection Info
+        run: |
+          name="${{ github.event.inputs.vps_name || github.event.client_payload.vps_name || 'manual-vps' }}"
+          {
+            echo "=== VPS Access Info ==="
+            echo "SSH Command: ssh runner@$SERVEO_SSH_LINK"
+            echo "Serveo Link: ${{ env.SERVEO_SSH_LINK }}"
+            echo "Username: runner"
+            echo "Password: (empty - no password)"
+            echo "Active Time: 6 hours"
+            echo "========================"
+          } > "links/$name.txt"
+          echo "📄 SSH info saved to links/$name.txt"
+
+      - name: 🚀 Start Playit Tunnel (if exists)
+        run: |
+          if [ -f "playit" ]; then
+            echo "🎮 Starting Playit..."
+            chmod +x playit
+            nohup ./playit > playit.log 2>&1 &
+            echo "✅ Playit started."
+          else
+            echo "🔍 Playit not found, skipping."
+          fi
 
       - name: 📦 Save backup
         run: |
-          name="${{ github.event.client_payload.vps_name || 'manual-vps' }}"
-          zip -qr ".backup/$name.zip" . -x ".git/*" ".github/*" ".backup/*" || true
+          name="${{ github.event.inputs.vps_name || github.event.client_payload.vps_name || 'manual-vps' }}"
+          echo "💾 Creating backup..."
+          zip -qr ".backup/$name.zip" . -x ".git/*" ".github/*" ".backup/*" "links/*" || true
+          
+          # Upload backup lên transfer.sh
+          if [ -f ".backup/$name.zip" ]; then
+            echo "📤 Uploading backup to transfer.sh..."
+            UPLOAD_URL=$(curl -s --upload-file ".backup/$name.zip" "https://transfer.sh/$name.zip")
+            if [ -n "$UPLOAD_URL" ]; then
+              echo "🔗 Backup uploaded: $UPLOAD_URL"
+              echo "$UPLOAD_URL" > "links/$name-backup-url.txt"
+            fi
+          fi
 
       - name: 📤 Push updated files
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
-          commit_message: "🔁 Updated SSH + backup"
+          commit_message: "🔁 Updated VPS: ${{ github.event.inputs.vps_name || github.event.client_payload.vps_name || 'manual-vps' }}"
           file_pattern: 'links/*.txt .backup/*.zip'
 
       - name: ⏳ Keep VPS alive
         run: |
-          for i in $(seq 1 $((360))); do
-            echo "🟢 Running minute $i/360..."
+          echo "🟢 VPS is running for 6 hours..."
+          for i in {1..360}; do
+            echo "⏱️ Minute $i/360"
             sleep 60
           done
 
       - name: 🔁 Restart workflow
         if: always()
         run: |
+          name="${{ github.event.inputs.vps_name || github.event.client_payload.vps_name || 'manual-vps' }}"
           curl -X POST \
             -H "Accept: application/vnd.github+json" \
             -H "Authorization: Bearer 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" \
