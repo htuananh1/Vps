@@ -43,18 +43,21 @@ jobs:
 
       - name: 🔐 Start Serveo SSH Tunnel
         run: |
+          # Tạo thư mục ~/.ssh nếu chưa có
+          mkdir -p ~/.ssh
+          
           # Cấu hình SSH để không kiểm tra host key
           echo "Host serveo.net" > ~/.ssh/config
           echo "  StrictHostKeyChecking no" >> ~/.ssh/config
           echo "  UserKnownHostsFile=/dev/null" >> ~/.ssh/config
           
-          # Mở tunnel trong background
+          # Mở tunnel
           ssh -R 80:localhost:22 serveo.net > serveo_output.txt 2>&1 &
           
-          # Đợi 5 giây để tunnel khởi động
+          # Đợi 5 giây
           sleep 5
           
-          # Lấy URL từ output
+          # Lấy URL
           SERVEO_URL=$(grep -o "https://[a-zA-Z0-9.-]*\.serveo\.net" serveo_output.txt | head -1)
           if [ -z "$SERVEO_URL" ]; then
             echo "❌ Failed to get Serveo URL"
