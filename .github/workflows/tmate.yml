@@ -9,8 +9,6 @@ jobs:
   start-vps:
     runs-on: ubuntu-latest
     timeout-minutes: 360
-    env:
-      TMATE_SERVER: nyc1.tmate.io
 
     steps:
       - name: ⬇️ Checkout
@@ -23,40 +21,53 @@ jobs:
         run: |
           name="${{ github.event.client_payload.vps_name || 'manual-vps' }}"
           if [[ "${{ github.event.client_payload.backup }}" == "true" ]]; then
-            unzip ".backup/$name.zip" -d . || echo "⚠️ No backup found."
+            unzip ".backup/$name.zip" -d . -x "*.git/*" "*.github/*" ".backup/*" || echo "⚠️ No backup found."
           fi
 
-      - name: 🔐 Start serveo tunnel
+      - name: 🔐 Start Serveo tunnel
         run: |
-          sudo apt update -y && sudo apt install -y sshpass screen
-          screen -S serveo -dm ssh -o StrictHostKeyChecking=no -R 80:localhost:22 serveo.net
-          sleep 10
-          echo "ssh root@$(curl -s https://serveo.net/api/v1/session | jq -r '.hostname').serveo.net" > "links/${{ github.event.client_payload.vps_name || 'manual-vps' }}.txt"
+          sudo apt update -y && sudo apt install -y screen
+          mkdir -p /tmp/serveo_logs
+          screen -S serveo -Logfile /tmp/serveo_logs/serveo.log -Logon -dm \
+            ssh -o StrictHostKeyChecking=no -R 80:localhost:22 serveo.net
+          sleep 15
+          # Trích xuất URL SSH từ log
+          url_line=$(grep -o 'ssh root@[^ ]*\.serveo\.net' /tmp/serveo_logs/serveo.log | head -n 1)
+          if [ -z "$url_line" ]; then
+            echo "❌ Failed to get SSH URL from Serveo. Check logs:"
+            cat /tmp/serveo_logs/serveo.log
+            exit 1
+          fi
+          echo "$url_line" > "links/${{ github.event.client_payload.vps_name || 'manual-vps' }}.txt"
+          echo "✅ SSH URL: $url_line"
 
       - name: 🚀 Start Playit Tunnel
         run: |
           wget -qO playit https://github.com/playit-cloud/playit-agent/releases/latest/download/playit-linux-amd64
           chmod +x playit
           nohup ./playit > playit.log 2>&1 &
-          echo "✅ Playit started."
+          echo "✅ Playit tunnel started in background."
 
       - name: 📦 Save backup
         run: |
           name="${{ github.event.client_payload.vps_name || 'manual-vps' }}"
           zip -qr ".backup/$name.zip" . -x ".git/*" ".github/*" ".backup/*" || true
+          echo "📦 Backup saved: .backup/$name.zip"
 
-      - name: 📤 Push changes
+      - name: 📤 Commit & push changes
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
-          commit_message: "🔁 Updated SSH + backup"
-          file_pattern: 'links/*.txt .backup/*.zip'
+          commit_message: "🔁 Updated SSH links and backup"
+          file_pattern: links/*.txt .backup/*.zip
+          repository: .
 
-      - name: ⏳ Keep alive & restart
+      - name: ⏳ Wait & Restart workflow
         run: |
-          sleep 300  # Wait a bit before restart to ensure stability
+          echo "🟢 Waiting 5 minutes before restarting..."
+          sleep 300
           curl -X POST \
             -H "Accept: application/vnd.github+json" \
-            -H "Authorization: Bearer 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" \
+            -H "Authorization: Bearer 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 }}" \
             -H "Content-Type: application/json" \
             https://api.github.com/repos/${{ github.repository }}/dispatches \
             -d '{"event_type": "create-vps", "client_payload": {"vps_name": "manual-vps", "backup": true}}'
