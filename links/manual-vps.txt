@@ -1,1 +1,1 @@
-ssh root@<ngẫu-nhiên>.serveo.net
+ssh root@.serveo.net
