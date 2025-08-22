@@ -41,15 +41,42 @@ jobs:
             fi
           fi
 
-      - name: 🔐 Start tmate session
+      - name: 🔐 Start Serveo SSH Tunnel
         run: |
-          sudo apt update -y && sudo apt install -y tmate
-          tmate -S /tmp/tmate.sock new-session -d
-          tmate -S /tmp/tmate.sock wait tmate-ready
-          SSH=$(tmate -S /tmp/tmate.sock display -p '#{tmate_ssh}')
+          # Cấu hình SSH để không kiểm tra host key
+          echo "Host serveo.net" > ~/.ssh/config
+          echo "  StrictHostKeyChecking no" >> ~/.ssh/config
+          echo "  UserKnownHostsFile=/dev/null" >> ~/.ssh/config
+          
+          # Mở tunnel trong background
+          ssh -R 80:localhost:22 serveo.net > serveo_output.txt 2>&1 &
+          
+          # Đợi 5 giây để tunnel khởi động
+          sleep 5
+          
+          # Lấy URL từ output
+          SERVEO_URL=$(grep -o "https://[a-zA-Z0-9.-]*\.serveo\.net" serveo_output.txt | head -1)
+          if [ -z "$SERVEO_URL" ]; then
+            echo "❌ Failed to get Serveo URL"
+            exit 1
+          fi
+          
+          echo "SERVEO_SSH_LINK=$SERVEO_URL" >> $GITHUB_ENV
+          echo "🔗 Serveo tunnel started: $SERVEO_URL"
+
+      - name: 📝 Save Connection Info
+        run: |
           name="${{ github.event.inputs.vps_name || github.event.client_payload.vps_name || 'manual-vps' }}"
-          echo "$SSH" > "links/$name.txt"
-          echo "🔗 SSH link saved to links/$name.txt"
+          {
+            echo "=== VPS Access Info ==="
+            echo "SSH Command: ssh root@$SERVEO_SSH_LINK"
+            echo "Serveo Link: ${{ env.SERVEO_SSH_LINK }}"
+            echo "Username: root"
+            echo "Password: (empty)"
+            echo "Active Time: 6 hours"
+            echo "========================"
+          } > "links/$name.txt"
+          echo "📄 SSH info saved to links/$name.txt"
 
       - name: 🚀 Start Playit Tunnel
         run: |
@@ -66,12 +93,12 @@ jobs:
       - name: 📤 Push updated files
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
-          commit_message: "🔁 Updated SSH + backup"
+          commit_message: "🔁 Updated VPS: ${{ github.event.inputs.vps_name || github.event.client_payload.vps_name || 'manual-vps' }}"
           file_pattern: 'links/*.txt .backup/*.zip'
 
       - name: ⏳ Keep VPS alive
         run: |
-          for i in $(seq 1 360); do
+          for i in {1..360}; do
             echo "🟢 Running minute $i/360..."
             sleep 60
           done
