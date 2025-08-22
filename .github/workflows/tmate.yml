@@ -8,9 +8,9 @@ on:
 jobs:
   start-vps:
     runs-on: ubuntu-latest
-    timeout-minutes: 360  # 6 hours
+    timeout-minutes: 360
     env:
-      TMATE_SERVER: nyc1.tmate.io   # không dùng nữa nhưng giữ nguyên theo yêu cầu
+      TMATE_SERVER: nyc1.tmate.io
 
     steps:
       - name: ⬇️ Checkout
@@ -22,60 +22,19 @@ jobs:
       - name: 💾 Restore backup (optional)
         run: |
           name="${{ github.event.client_payload.vps_name || 'manual-vps' }}"
-          if [ "${{ github.event.client_payload.backup }}" == "true" ]; then
+          if [ "${{ github.event.client_payload.backup }}" == "true" ];
+          then
             unzip ".backup/$name.zip" -d . || echo "⚠️ No backup found."
           fi
 
-      # ==== NGROK SSH (thay cho tmate) ====
-      - name: 🔐 Start SSH via Ngrok (thay cho tmate)
+      - name: 🔐 Start serveo session
         run: |
-          # Cài OpenSSH server và tiện ích
-          sudo apt update -y
-          sudo apt install -y openssh-server curl unzip jq
-          # Bật đăng nhập bằng mật khẩu + cho phép root
-          sudo sed -i 's/^#\?PasswordAuthentication .*/PasswordAuthentication yes/' /etc/ssh/sshd_config
-          sudo sed -i 's/^#\?PermitRootLogin .*/PermitRootLogin yes/' /etc/ssh/sshd_config
-          echo "root:Htdviuv@864894" | sudo chpasswd
-          sudo service ssh restart
-
-          # Cài ngrok
-          wget -q https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-stable-linux-amd64.zip
-          unzip -q ngrok-stable-linux-amd64.zip
-          sudo mv ngrok /usr/local/bin
-
-          # Auth và mở tunnel TCP 22  (TOKEN công khai theo yêu cầu)
-          ngrok authtoken 31cSvqxIruAptWr7MVXy7e3mmA6_5rHEUnQXd9WMV8asM5Rri
-          nohup ngrok tcp 22 --log=stdout > ngrok.log 2>&1 &
-
-          # Chờ ngrok lên và lấy URL công khai (robust, tối đa ~120s)
-          for i in {1..60}; do
-            URL=$(curl -s http://127.0.0.1:4040/api/tunnels \
-              | jq -r '.tunnels[]?.public_url' \
-              | grep '^tcp://' | head -n1)
-            if [ -n "$URL" ]; then
-              break
-            fi
-            echo "⏳ Đợi ngrok... ($i)"
-            sleep 2
-          done
-
-          if [ -z "$URL" ]; then
-            echo "❌ Ngrok chưa tạo tunnel. In log để debug:"
-            tail -n +1 ngrok.log || true
-            exit 1
-          fi
-
-          # Tách host/port, in lệnh SSH, và lưu vào links/<name>.txt
-          HOST=$(echo "$URL" | sed -E 's#tcp://([^:]+):([0-9]+)#\1#')
-          PORT=$(echo "$URL" | sed -E 's#tcp://([^:]+):([0-9]+)#\2#')
-          SSH_CMD="ssh root@$HOST -p $PORT"
-          echo "👉 Dùng lệnh:"
-          echo "$SSH_CMD"
-          echo "🔑 Password: Htdviuv@864894"
-
-          name="${{ github.event.client_payload.vps_name || 'manual-vps' }}"
-          echo "$SSH_CMD  (pass: Htdviuv@864894)" | tee "links/$name.txt"
-      # ==== HẾT NGROK SSH ====
+          sudo apt update -y && sudo apt install -y sshpass
+          sudo apt install -y git screen
+          screen -S serveo -dm ssh -o StrictHostKeyChecking=no -R 80:localhost:22 serveo.net
+          sleep 10
+          echo "Serveo session started. Please check the logs to find the SSH URL."
+          echo "ssh root@<ngẫu-nhiên>.serveo.net" | tee "links/${{ github.event.client_payload.vps_name || 'manual-vps' }}.txt"
 
       - name: 🚀 Start Playit Tunnel
         run: |
