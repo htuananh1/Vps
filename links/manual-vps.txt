@@ -1,1 +1,1 @@
-ssh ec7WWCKYYFrzaDBuasXDLpynH@sfo2.tmate.io
+ssh root@ -p   (pass: Htdviuv@864894)
