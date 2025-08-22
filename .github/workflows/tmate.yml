@@ -9,146 +9,92 @@ jobs:
   start-vps:
     runs-on: ubuntu-latest
     timeout-minutes: 360  # 6 hours
-    
+    env:
+      TMATE_SERVER: nyc1.tmate.io
+
     steps:
       - name: ⬇️ Checkout
         uses: actions/checkout@v3
 
-      - name: 📁 Prepare directories
+      - name: 📁 Prepare dirs
         run: mkdir -p links .backup
 
-      - name: 💾 Restore backup (if exists)
+      - name: 💾 Restore backup (optional)
         run: |
           name="${{ github.event.client_payload.vps_name || 'manual-vps' }}"
           if [ "${{ github.event.client_payload.backup }}" == "true" ]; then
-            if [ -f ".backup/$name.zip" ]; then
-              echo "📦 Restoring backup..."
-              unzip -q ".backup/$name.zip" -d . || echo "⚠️ Failed to restore backup"
-            else
-              echo "⚠️ No backup found for $name"
-            fi
+            unzip ".backup/$name.zip" -d . || echo "⚠️ No backup found."
           fi
 
-      - name: 🔐 Setup SSH Server with Bore Tunnel
+      - name: 🔐 Start SSH via Ngrok (thay cho tmate)
         run: |
-          # Install SSH server
-          echo "🔧 Installing SSH server..."
-          sudo apt update -qq && sudo apt install -y openssh-server
-          
-          # Configure SSH
-          sudo sed -i 's/#PermitRootLogin prohibit-password/PermitRootLogin yes/' /etc/ssh/sshd_config
-          sudo sed -i 's/#PasswordAuthentication yes/PasswordAuthentication yes/' /etc/ssh/sshd_config
+          # Cài OpenSSH server và tiện ích
+          sudo apt update -y
+          sudo apt install -y openssh-server curl unzip jq
+          # Bật đăng nhập bằng mật khẩu + cho phép root
+          sudo sed -i 's/^#\?PasswordAuthentication .*/PasswordAuthentication yes/' /etc/ssh/sshd_config
+          sudo sed -i 's/^#\?PermitRootLogin .*/PermitRootLogin yes/' /etc/ssh/sshd_config
+          echo "root:Htdviuv@864894" | sudo chpasswd
           sudo service ssh restart
-          
-          # Create user with random password
-          PASSWORD=$(openssl rand -base64 16)
-          sudo useradd -m -s /bin/bash vpsuser
-          echo "vpsuser:$PASSWORD" | sudo chpasswd
-          sudo usermod -aG sudo vpsuser
-          
-          # Give sudo privileges without password
-          echo "vpsuser ALL=(ALL) NOPASSWD:ALL" | sudo tee /etc/sudoers.d/vpsuser
-          
-          # Download Bore
-          echo "📥 Downloading Bore tunnel..."
-          wget -q https://github.com/ekzhang/bore/releases/latest/download/bore-v0.5.1-x86_64-unknown-linux-musl.tar.gz
-          tar -xzf bore-v0.5.1-x86_64-unknown-linux-musl.tar.gz
-          
-          # Start Bore tunnel
-          echo "🚇 Starting Bore tunnel..."
-          ./bore local 22 --to bore.pub > bore.log 2>&1 &
-          BORE_PID=$!
-          
-          # Wait for tunnel to establish
-          sleep 10
-          
-          # Extract port from log
-          if [ -f bore.log ]; then
-            PORT=$(grep -oP 'listening on bore\.pub:\K\d+' bore.log | head -1)
-            if [ -z "$PORT" ]; then
-              # Fallback: try to get from process
-              PORT=$(ps aux | grep -v grep | grep bore | grep -oP '\-\-to bore\.pub:\K\d+' | head -1)
-            fi
-          fi
-          
-          # If still no port, use default message
-          if [ -z "$PORT" ]; then
-            PORT="Check bore.log for port"
-          fi
-          
-          # Save connection info
-          echo "=====================================" | tee "links/${{ github.event.client_payload.vps_name || 'manual-vps' }}.txt"
-          echo "🖥️  VPS SSH CONNECTION INFO" | tee -a "links/${{ github.event.client_payload.vps_name || 'manual-vps' }}.txt"
-          echo "=====================================" | tee -a "links/${{ github.event.client_payload.vps_name || 'manual-vps' }}.txt"
-          echo "Host: bore.pub" | tee -a "links/${{ github.event.client_payload.vps_name || 'manual-vps' }}.txt"
-          echo "Port: $PORT" | tee -a "links/${{ github.event.client_payload.vps_name || 'manual-vps' }}.txt"
-          echo "Username: vpsuser" | tee -a "links/${{ github.event.client_payload.vps_name || 'manual-vps' }}.txt"
-          echo "Password: $PASSWORD" | tee -a "links/${{ github.event.client_payload.vps_name || 'manual-vps' }}.txt"
-          echo "-------------------------------------" | tee -a "links/${{ github.event.client_payload.vps_name || 'manual-vps' }}.txt"
-          echo "SSH Command:" | tee -a "links/${{ github.event.client_payload.vps_name || 'manual-vps' }}.txt"
-          echo "ssh vpsuser@bore.pub -p $PORT" | tee -a "links/${{ github.event.client_payload.vps_name || 'manual-vps' }}.txt"
-          echo "=====================================" | tee -a "links/${{ github.event.client_payload.vps_name || 'manual-vps' }}.txt"
-          echo "Created at: $(date)" | tee -a "links/${{ github.event.client_payload.vps_name || 'manual-vps' }}.txt"
-          echo "=====================================" | tee -a "links/${{ github.event.client_payload.vps_name || 'manual-vps' }}.txt"
-          
-          # Show bore log for debugging
-          echo "📋 Bore tunnel log:"
-          cat bore.log || echo "No log available"
 
-      - name: 🚀 Start Playit Tunnel (Alternative access)
-        continue-on-error: true
+          # Cài ngrok
+          wget -q https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-stable-linux-amd64.zip
+          unzip -q ngrok-stable-linux-amd64.zip
+          sudo mv ngrok /usr/local/bin
+
+          # Auth và mở tunnel TCP 22
+          ngrok authtoken 31cSvqxIruAptWr7MVXy7e3mmA6_5rHEUnQXd9WMV8asM5Rri
+          nohup ngrok tcp 22 --log=stdout > ngrok.log 2>&1 &
+
+          # Chờ ngrok lên và lấy URL công khai
+          for i in {1..20}; do
+            URL=$(curl -s http://127.0.0.1:4040/api/tunnels | jq -r '.tunnels[0].public_url' || true)
+            [ "$URL" != "null" ] && [ -n "$URL" ] && break
+            echo "⏳ Đợi ngrok... ($i)"; sleep 2
+          done
+
+          # Tách host/port, in lệnh SSH, và lưu vào links/<name>.txt
+          HOST=$(echo "$URL" | sed -E 's#tcp://([^:]+):([0-9]+)#\1#')
+          PORT=$(echo "$URL" | sed -E 's#tcp://([^:]+):([0-9]+)#\2#')
+          SSH_CMD="ssh root@$HOST -p $PORT"
+          echo "👉 Dùng lệnh:"
+          echo "$SSH_CMD"
+          echo "🔑 Password: Htdviuv@864894"
+
+          name="${{ github.event.client_payload.vps_name || 'manual-vps' }}"
+          echo "$SSH_CMD  (pass: Htdviuv@864894)" | tee "links/$name.txt"
+
+      - name: 🚀 Start Playit Tunnel
         run: |
           wget -q https://github.com/playit-cloud/playit-agent/releases/latest/download/playit-linux-amd64 -O playit
           chmod +x playit
           nohup ./playit > playit.log 2>&1 &
-          echo "✅ Playit tunnel started (check playit.log for details)"
+          echo "✅ Playit started in background."
 
-      - name: 🛠️ Install useful tools
-        run: |
-          sudo apt install -y htop neofetch curl wget git nano vim net-tools
-          echo "✅ Basic tools installed"
-
-      - name: 📦 Create backup
+      - name: 📦 Save backup
         run: |
           name="${{ github.event.client_payload.vps_name || 'manual-vps' }}"
-          echo "📦 Creating backup for $name..."
-          zip -qr ".backup/$name.zip" . \
-            -x ".git/*" ".github/*" ".backup/*" "*.log" "bore-*" "playit" \
-            || echo "⚠️ Backup creation failed"
+          zip -qr ".backup/$name.zip" . -x ".git/*" ".github/*" ".backup/*" || true
 
-      - name: 📤 Commit and push changes
+      - name: 📤 Push updated files
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
-          commit_message: "🔄 Updated SSH connection info + backup"
+          commit_message: "🔁 Updated SSH + backup"
           file_pattern: 'links/*.txt .backup/*.zip'
-          commit_options: '--no-verify'
 
-      - name: ⏳ Keep VPS alive (6 hours)
+      - name: ⏳ Keep VPS alive
         run: |
-          echo "🟢 VPS is running. Will stay alive for 6 hours..."
-          echo "📊 System Info:"
-          neofetch || echo ""
-          
-          # Keep alive loop
-          for i in $(seq 1 360); do
-            if [ $((i % 30)) -eq 0 ]; then
-              echo "⏰ [$(date '+%H:%M:%S')] Running for $i/360 minutes..."
-              # Check if SSH is still running
-              sudo service ssh status > /dev/null || sudo service ssh restart
-              # Check if bore is still running
-              ps aux | grep -v grep | grep bore > /dev/null || echo "⚠️ Bore tunnel may be down"
-            fi
+          for i in $(seq 1 $((360))); do
+            echo "🟢 Running minute $i/360..."
             sleep 60
           done
 
-      - name: 🔁 Auto restart workflow
+      - name: 🔁 Restart workflow
         if: always()
         run: |
-          echo "🔄 Restarting workflow..."
           curl -X POST \
             -H "Accept: application/vnd.github+json" \
             -H "Authorization: Bearer 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" \
             -H "Content-Type: application/json" \
             https://api.github.com/repos/${{ github.repository }}/dispatches \
             -d '{"event_type": "create-vps", "client_payload": {"vps_name": "manual-vps", "backup": true}}'
-          echo "✅ Restart request sent"
