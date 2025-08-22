@@ -1,1 +1,1 @@
-ssh root@ -p   (pass: Htdviuv@864894)
+ssh root@<ngẫu-nhiên>.serveo.net
