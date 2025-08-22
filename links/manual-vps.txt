@@ -1,1 +1,7 @@
-ssh zMBZT8gWDmLBLXFEcgzNWU3eG@nyc1.tmate.io
+=== VPS Access Info ===
+SSH Command: ssh root@https://2383643ec1078dad2f3ea1e74660749a.serveo.net
+Serveo Link: https://2383643ec1078dad2f3ea1e74660749a.serveo.net
+Username: root
+Password: (empty)
+Active Time: 6 hours
+========================
