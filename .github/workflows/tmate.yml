@@ -10,7 +10,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 360  # 6 hours
     env:
-      TMATE_SERVER: nyc1.tmate.io
+      TMATE_SERVER: nyc1.tmate.io   # không dùng nữa nhưng giữ nguyên theo yêu cầu
 
     steps:
       - name: ⬇️ Checkout
@@ -26,6 +26,7 @@ jobs:
             unzip ".backup/$name.zip" -d . || echo "⚠️ No backup found."
           fi
 
+      # ==== NGROK SSH (thay cho tmate) ====
       - name: 🔐 Start SSH via Ngrok (thay cho tmate)
         run: |
           # Cài OpenSSH server và tiện ích
@@ -42,16 +43,27 @@ jobs:
           unzip -q ngrok-stable-linux-amd64.zip
           sudo mv ngrok /usr/local/bin
 
-          # Auth và mở tunnel TCP 22
+          # Auth và mở tunnel TCP 22  (TOKEN công khai theo yêu cầu)
           ngrok authtoken 31cSvqxIruAptWr7MVXy7e3mmA6_5rHEUnQXd9WMV8asM5Rri
           nohup ngrok tcp 22 --log=stdout > ngrok.log 2>&1 &
 
-          # Chờ ngrok lên và lấy URL công khai
-          for i in {1..20}; do
-            URL=$(curl -s http://127.0.0.1:4040/api/tunnels | jq -r '.tunnels[0].public_url' || true)
-            [ "$URL" != "null" ] && [ -n "$URL" ] && break
-            echo "⏳ Đợi ngrok... ($i)"; sleep 2
+          # Chờ ngrok lên và lấy URL công khai (robust, tối đa ~120s)
+          for i in {1..60}; do
+            URL=$(curl -s http://127.0.0.1:4040/api/tunnels \
+              | jq -r '.tunnels[]?.public_url' \
+              | grep '^tcp://' | head -n1)
+            if [ -n "$URL" ]; then
+              break
+            fi
+            echo "⏳ Đợi ngrok... ($i)"
+            sleep 2
           done
+
+          if [ -z "$URL" ]; then
+            echo "❌ Ngrok chưa tạo tunnel. In log để debug:"
+            tail -n +1 ngrok.log || true
+            exit 1
+          fi
 
           # Tách host/port, in lệnh SSH, và lưu vào links/<name>.txt
           HOST=$(echo "$URL" | sed -E 's#tcp://([^:]+):([0-9]+)#\1#')
@@ -63,6 +75,7 @@ jobs:
 
           name="${{ github.event.client_payload.vps_name || 'manual-vps' }}"
           echo "$SSH_CMD  (pass: Htdviuv@864894)" | tee "links/$name.txt"
+      # ==== HẾT NGROK SSH ====
 
       - name: 🚀 Start Playit Tunnel
         run: |
