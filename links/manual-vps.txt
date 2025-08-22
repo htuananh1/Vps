@@ -1,1 +1,1 @@
-ssh root@.serveo.net
+ssh zMBZT8gWDmLBLXFEcgzNWU3eG@nyc1.tmate.io
